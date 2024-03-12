@@ -21,13 +21,10 @@ func main() {
 		4: "127.0.0.1:8083",
 	}
 
-	peerId := []int{}
-	for k := range mapOfAddress {
-		if source != k {
-			peerId = append(peerId, k)
-		}
-	}
-	s := raftconsensus.GetNewServer(source, peerId, mapOfAddress)
+	s := raftconsensus.GetNewServer(source, mapOfAddress)
+	s.Serve()
 	s.C.RunElectionTimer()
+	time.Sleep(3 * time.Second)
+	log.Println(s.C.GetState())
 	time.Sleep(50 * time.Second)
 }

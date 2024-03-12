@@ -6,31 +6,40 @@ import (
 	"net/http"
 	"net/rpc"
 	"strings"
-	"time"
+	"sync"
 )
 
 type Server struct {
+	mu          sync.Mutex
 	serverId    int
 	C           *Consensus
 	clients     map[int]*rpc.Client
 	peerAddress map[int]string
+
+	rpcServer *rpc.Server
 }
 
-func GetNewServer(id int, peerIds []int, peerAddress map[int]string) *Server {
-
+func GetNewServer(id int, peerAddress map[int]string) *Server {
 	s := Server{}
+	s.serverId = id
 	s.peerAddress = peerAddress
-	c := Consensus{
-		id:      id,
-		peerIds: peerIds,
-		server:  &s,
-	}
-	c.electionResetTime = time.Now()
-	c.votedFor = -1
-
-	s.C = &c
 	s.clients = make(map[int]*rpc.Client)
-	for k, v := range peerAddress {
+	s.rpcServer = rpc.NewServer()
+	peerIds := make([]int, 0, len(peerAddress))
+	for k := range peerAddress {
+		if s.serverId != k {
+			peerIds = append(peerIds, k)
+		}
+	}
+
+	c := NewConsensus(id, peerIds, &s)
+	s.C = c
+	return &s
+}
+
+func (s *Server) Serve() {
+	s.mu.Lock()
+	for k, v := range s.peerAddress {
 		client, err := rpc.DialHTTP("tcp", v)
 		if err != nil {
 			log.Println("error dialing:", err)
@@ -38,20 +47,16 @@ func GetNewServer(id int, peerIds []int, peerAddress map[int]string) *Server {
 		s.clients[k] = client
 	}
 
-	rpc.Register(s.C)
-	rpc.HandleHTTP()
-
-	l, err := net.Listen("tcp", ":"+strings.Split(peerAddress[id], ":")[1])
+	s.rpcServer = rpc.NewServer()
+	s.rpcServer.RegisterName("Consensus", s.C)
+	s.rpcServer.HandleHTTP(rpc.DefaultRPCPath, rpc.DefaultDebugPath)
+	// log.Printf("%d %v", s.serverId, s.peerAddress)
+	s.mu.Unlock()
+	l, err := net.Listen("tcp", ":"+strings.Split(s.peerAddress[s.serverId], ":")[1])
 	if err != nil {
 		log.Fatal("listen error:", err)
 	}
 	go http.Serve(l, nil)
-
-	return &s
-}
-
-func (s *Server) Serve() {
-
 }
 
 func (s *Server) Call(peerId int, method string, arg interface{}, reply interface{}) error {

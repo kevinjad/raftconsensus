@@ -53,11 +53,30 @@ type Consensus struct {
 	log []LogEntry
 }
 
+func NewConsensus(id int, peerIds []int, server *Server) *Consensus {
+	c := Consensus{
+		id:      id,
+		peerIds: peerIds,
+		server:  server,
+	}
+
+	c.electionResetTime = time.Now()
+	c.votedFor = -1
+	return &c
+}
+
 func (c *Consensus) debuglog(format string, args ...interface{}) {
 	if DEBUG == 1 {
 		format = fmt.Sprintf("[%d]", c.id) + format
 		log.Printf(format, args...)
 	}
+}
+
+func (c *Consensus) GetState() string {
+	c.mu.Lock()
+	state := c.state.String()
+	c.mu.Unlock()
+	return state
 }
 
 func (c *Consensus) startElection() {
