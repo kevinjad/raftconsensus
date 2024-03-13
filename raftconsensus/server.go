@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Server struct {
@@ -57,6 +58,14 @@ func (s *Server) Serve() {
 		log.Fatal("listen error:", err)
 	}
 	go http.Serve(l, nil)
+
+	go func() {
+		c := s.C
+		c.mu.Lock()
+		c.electionResetTime = time.Now()
+		c.mu.Unlock()
+		c.RunElectionTimer()
+	}()
 }
 
 func (s *Server) Call(peerId int, method string, arg interface{}, reply interface{}) error {

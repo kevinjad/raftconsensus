@@ -55,13 +55,13 @@ type Consensus struct {
 
 func NewConsensus(id int, peerIds []int, server *Server) *Consensus {
 	c := Consensus{
-		id:      id,
-		peerIds: peerIds,
-		server:  server,
+		id:       id,
+		peerIds:  peerIds,
+		server:   server,
+		votedFor: -1,
+		state:    Follower,
 	}
 
-	c.electionResetTime = time.Now()
-	c.votedFor = -1
 	return &c
 }
 
