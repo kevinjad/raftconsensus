@@ -1,9 +1,8 @@
 package raftconsensus
 
 type AppendEntriesArg struct {
-	Term     int
-	LeaderId int
-
+	Term         int
+	LeaderId     int
 	PrevLogIndex int
 	PrevLogTerm  int
 	Entries      []LogEntry

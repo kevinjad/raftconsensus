@@ -23,8 +23,5 @@ func main() {
 
 	s := raftconsensus.GetNewServer(source, mapOfAddress)
 	s.Serve()
-	// s.C.RunElectionTimer()
-	// time.Sleep(3 * time.Second)
-	// log.Println(s.C.GetState())
 	time.Sleep(50 * time.Second)
 }

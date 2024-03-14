@@ -38,6 +38,13 @@ type LogEntry struct {
 	Command interface{}
 	TermId  int
 }
+
+type CommitEntry struct {
+	Command interface{}
+	Index   int
+	TermId  int
+}
+
 type Consensus struct {
 	id      int
 	peerIds []int
@@ -50,7 +57,12 @@ type Consensus struct {
 	state             ConsensusState
 	electionResetTime time.Time
 
-	log []LogEntry
+	log             []LogEntry
+	peerIndex       map[int]int
+	peerBeforeIndex map[int]int
+	commitIndex     int
+
+	newCommitReadyChan chan struct{}
 }
 
 func NewConsensus(id int, peerIds []int, server *Server) *Consensus {
@@ -151,14 +163,29 @@ func (c *Consensus) sendHeartBeat() {
 	term := c.currentTerm
 	c.mu.Unlock()
 
-	args := AppendEntriesArg{
-		Term:     term,
-		LeaderId: c.id,
-	}
 	for _, peerId := range c.peerIds {
-		c.debuglog("sending append entries to peer %d , args: ", peerId, args)
 		var reply AppendEntriesReply
 		go func(peerId int) {
+			c.mu.Lock()
+			latestIndex := c.peerIndex[peerId]
+			prevIndex := latestIndex - 1
+			prevLogTerm := -1
+			if prevIndex >= 0 {
+				prevLogTerm = c.log[prevIndex].TermId
+			}
+			entries := c.log[latestIndex:]
+
+			args := AppendEntriesArg{
+				Term:         term,
+				LeaderId:     c.id,
+				PrevLogIndex: prevIndex,
+				PrevLogTerm:  prevLogTerm,
+				Entries:      entries,
+				LeaderCommit: c.commitIndex,
+			}
+			c.mu.Unlock()
+			c.debuglog("sending append entries to peer %d , args: ", peerId, args)
+
 			err := c.server.Call(peerId, "Consensus.AppendEntries", args, &reply)
 			if err == nil {
 				c.mu.Lock()
@@ -167,6 +194,35 @@ func (c *Consensus) sendHeartBeat() {
 					c.debuglog("reply term is greater in heart beat reply")
 					c.becomeFollower(reply.Term)
 					return
+				}
+				if c.state == Leader && term == reply.Term {
+					if reply.Success {
+						c.peerIndex[peerId] = latestIndex + len(entries)
+						c.peerBeforeIndex[peerId] = c.peerIndex[peerId] - 1
+						c.debuglog("AppendEntries reply from %d success: peerIndex := %v, peerBeforeIndex := %v", peerId, c.peerIndex, c.peerBeforeIndex)
+
+						savedCommitIndex := c.commitIndex
+						for i := c.commitIndex; i < len(c.log); i++ {
+							if c.log[i].TermId == c.currentTerm {
+								repcount := 1
+								for _, pid := range c.peerIds {
+									if c.peerBeforeIndex[pid] >= i {
+										repcount++
+									}
+								}
+								if 2*repcount > len(c.peerIds)+1 {
+									c.commitIndex = i
+								}
+							}
+						}
+						if savedCommitIndex != c.commitIndex {
+							c.debuglog("leader sets commitIndex := %d", c.commitIndex)
+							c.newCommitReadyChan <- struct{}{}
+						}
+					}
+				} else {
+					c.peerIndex[peerId] = latestIndex - 1
+					c.debuglog("AppendEntries reply from %d !success: peerIndex := %d", peerId, latestIndex-1)
 				}
 			}
 
@@ -268,4 +324,21 @@ func (c *Consensus) AppendEntries(arg AppendEntriesArg, reply *AppendEntriesRepl
 	reply.Term = c.currentTerm
 	c.debuglog("AppendEntries reply: %+v", *reply)
 	return nil
+}
+
+func (c *Consensus) Submit(command interface{}) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.debuglog("Submit received by %v: %v", c.state, command)
+	if c.state == Leader {
+		logEntry := LogEntry{
+			Command: command,
+			TermId:  c.currentTerm,
+		}
+		c.log = append(c.log, logEntry)
+		return true
+	} else {
+		return false
+	}
 }
