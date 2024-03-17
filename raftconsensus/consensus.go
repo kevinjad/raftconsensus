@@ -61,8 +61,10 @@ type Consensus struct {
 	peerIndex       map[int]int
 	peerBeforeIndex map[int]int
 	commitIndex     int
+	lastApplied     int
 
 	newCommitReadyChan chan struct{}
+	commitChan         chan CommitEntry
 }
 
 func NewConsensus(id int, peerIds []int, server *Server) *Consensus {
@@ -158,13 +160,39 @@ func (c *Consensus) startLeader() {
 	}()
 }
 
+func (c *Consensus) commitChanSender() {
+	for range c.newCommitReadyChan {
+		//okay we have a commitIndex change
+		c.mu.Lock()
+		la := c.lastApplied
+		ci := c.commitIndex
+		term := c.currentTerm
+		var entries []LogEntry
+		if ci > la {
+			entries = c.log[la+1 : ci+1]
+			c.lastApplied = ci
+		}
+		c.mu.Unlock()
+		c.debuglog("commitChanSender entries=%v, savedLastApplied=%d", entries, la)
+
+		for i, entry := range entries {
+			ce := CommitEntry{
+				Command: entry.Command,
+				TermId:  term,
+				Index:   la + i + 1,
+			}
+			c.commitChan <- ce
+		}
+	}
+	c.debuglog("commitChanSender done")
+}
+
 func (c *Consensus) sendHeartBeat() {
 	c.mu.Lock()
 	term := c.currentTerm
 	c.mu.Unlock()
 
 	for _, peerId := range c.peerIds {
-		var reply AppendEntriesReply
 		go func(peerId int) {
 			c.mu.Lock()
 			latestIndex := c.peerIndex[peerId]
@@ -185,7 +213,7 @@ func (c *Consensus) sendHeartBeat() {
 			}
 			c.mu.Unlock()
 			c.debuglog("sending append entries to peer %d , args: ", peerId, args)
-
+			var reply AppendEntriesReply
 			err := c.server.Call(peerId, "Consensus.AppendEntries", args, &reply)
 			if err == nil {
 				c.mu.Lock()
